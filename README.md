@@ -1,7 +1,5 @@
 # Final_project_418
-High throughput rsa encryption/decryption using Halide scheduling. 
-
-High throughtput rsa encryption/decryption using halide scheduling.
+High throughput rsa encryption/decryption using Halide scheduling.
 
 current construction of the project: 
   |__|__src                                                      bin lib Makefile__|
