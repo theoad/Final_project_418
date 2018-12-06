@@ -37,6 +37,8 @@ LDFLAGS = -L$(HOME)/halide/lib -lHalide -ldl
 LIBS = -lpthread -ldl
 
 # The relevant cpp files can be found using the "make dependancies" command
+# Add .cpp files appearing in the dependancies output here
+# Add .h files path as describe earlier
 CCFILES=$(SRCDIR)/$(RSADIR)/rsa.cpp $(SRCDIR)/main.cpp 
 
 OBJS=$(OBJDIR)/*.o
