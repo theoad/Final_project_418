@@ -13,9 +13,12 @@ CXX=g++
 #			(rsa) |-rsa.cpp-| (crypto) |-crypto cpp-| (include) |-rsa crypto-|
 #						(rsa) |-rsa.h-| (crypto) |-all crypto headers-|
 
-# Add into the .bashrc and source
+# Add into the .bashrc and source (need llvm+clang)
 # export PATH=/afs/cs.cmu.edu/academic/class/15418-f18/public/gcc-install/bin/:$PATH
 # export LD_LIBRARY_PATH=/afs/cs.cmu.edu/academic/class/15418-f18/public/gcc-install/lib64/:${LD_LIBRARY_PATH}
+# export LD_LIBRARY_PATH=~/halide/bin/:${LD_LIBRARY_PATH}
+# export LLVM_CONFIG=/usr/local/depot/llvm-7.0/bin/llvm-config
+# export CLANG=/usr/local/depot/llvm-7.0/bin/clang
 
 # This flag only works for linux machine, not Max OS
 CXXFLAGS+= -g -Wall -std=c++11
@@ -31,10 +34,10 @@ INCLUDES = -I$(SRCDIR)/include \
 		   -I$(SRCDIR)/include/crypto
 
 # define library paths in addition to /usr/lib
-LDFLAGS = -L$(HOME)/halide/lib -lHalide -ldl
+LDFLAGS = -L$(HOME)/halide/bin
 
 # define any libraries to link into executable:
-LIBS = -lpthread -ldl
+LIBS = -lHalide -lpthread -ldl
 
 # The relevant cpp files can be found using the "make dependancies" command
 # Add .cpp files appearing in the dependancies output here
@@ -46,7 +49,7 @@ OBJS=$(OBJDIR)/*.o
 # Compile & link direcly in one command (faster compile for small projects). 
 # Consider partitioning the compilation as the project grows larger
 rsa:
-	$(CXX) $(CXXFLAGS) $(CCFILES) $(INCLUDES) $(LDFLAGS) $(LIBS) -o $@
+	$(CXX) $(CXXFLAGS) $(CCFILES) $(INCLUDES) $(LDFLAGS) $(LIBS) -o $@ -fno-exceptions
 
 # To know what are the dependencies of the cpp files to compile run make dependancies in the command
 dependancies:
