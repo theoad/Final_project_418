@@ -1,7 +1,9 @@
 OBJDIR=objs
+OUTPUTDIR=out
 SRCDIR=src
 RSADIR=rsa
 CRYPTODIR=crypto
+EXEC=rsa
 
 .PHONY: all clean dependancies
 
@@ -9,9 +11,9 @@ CXX=g++
 
 # current construction of the project:
 #	|-Makefile src-|
-#		(src) |-rsa crypto include main.cpp-|
-#			(rsa) |-rsa.cpp-| (crypto) |-crypto cpp-| (include) |-rsa crypto-|
-#						(rsa) |-rsa.h-| (crypto) |-all crypto headers-|
+#		(src) |-rsa include main.cpp-|
+#			(rsa) |-rsa.cpp-| (include) |-rsa-|
+#						(rsa) |-rsa.h-|
 
 # Add into the .bashrc and source (need llvm+clang)
 # export PATH=/afs/cs.cmu.edu/academic/class/15418-f18/public/gcc-install/bin/:$PATH
@@ -20,8 +22,12 @@ CXX=g++
 # export LLVM_CONFIG=/usr/local/depot/llvm-7.0/bin/llvm-config
 # export CLANG=/usr/local/depot/llvm-7.0/bin/clang
 
+# Add into your home directory:
+# halide directory containing the halides binaries and tools
+# crypto directory containing the cryptopp files (as well as the compiled cryptolib.a -see crypto README.txt)
+
 # This flag only works for linux machine, not Max OS
-CXXFLAGS+= -g -Wall -std=c++11
+CXXFLAGS+= -g -Wall -std=c++11 -fexceptions
 
 # Add here the path of the directories containing the headers found with the "make dependancies" command
 # This allow to have include "file_name.h" and not "directory1/directory2/file_name.h
@@ -31,31 +37,33 @@ CXXFLAGS+= -g -Wall -std=c++11
 INCLUDES = -I$(SRCDIR)/include \
 		   -I$(HOME)/halide/include \
 		   -I$(HOME)/halide/tools \
-		   -I$(SRCDIR)/include/crypto
+		   -I$(HOME)/crypto
 
 # define library paths in addition to /usr/lib
-LDFLAGS = -L$(HOME)/halide/bin
+LDFLAGS = -L$(HOME)/halide/bin \
+			-L$(HOME)/crypto
 
 # define any libraries to link into executable:
-LIBS = -lHalide -lpthread -ldl
+LIBS = -lHalide -lpthread -ldl `libpng-config --cflags --ldflags` -ljpeg -lcryptopp
 
 # The relevant cpp files can be found using the "make dependancies" command
 # Add .cpp files appearing in the dependancies output here
 # Add .h files path as describe earlier
-CCFILES=$(SRCDIR)/$(RSADIR)/rsa.cpp $(SRCDIR)/main.cpp 
+CCFILES=$(SRCDIR)/$(RSADIR)/rsa.cpp $(SRCDIR)/main.cpp
 
 OBJS=$(OBJDIR)/*.o
 
-# Compile & link direcly in one command (faster compile for small projects). 
+# Compile & link direcly in one command (faster compile for small projects).
 # Consider partitioning the compilation as the project grows larger
-rsa:
-	$(CXX) $(CXXFLAGS) $(CCFILES) $(INCLUDES) $(LDFLAGS) $(LIBS) -o $@ -fno-exceptions
+$(EXEC):
+	$(CXX) $(CXXFLAGS) $(CCFILES) $(INCLUDES) $(LDFLAGS) $(LIBS) -o $@
 
 # To know what are the dependencies of the cpp files to compile run make dependancies in the command
 dependancies:
 	$(CXX) -MM $(CCFILES) $(INCLUDES) $(LDFLAGS) $(LIBS)
-dirs:
-	mkdir -p $(OBJDIR)
+
+install:
+	mkdir -p $(OBJDIR) $(OUTPUTDIR)
 
 clean:
-	rm -rf $(OBJDIR) rsa
+	rm -rf $(OBJDIR) $(OUTPUTDIR) $(EXEC)
