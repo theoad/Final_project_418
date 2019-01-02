@@ -1,84 +1,242 @@
 #include <iostream>
+#include <ctime>
+#include <string>
+#include "CycleTimer.h"
 #include "Halide.h"
 #include "halide_image_io.h"
 #include "rsa.h"
 #include "cryptlib.h"
 #include "osrng.h"
+#define CIPHER_SIZE 192
+
+////////////////////////////////////////////////
+// Random number generator
+CryptoPP::AutoSeededRandomPool rng;
+
+////////////////////////////////////////////////
+// Encryption and decryption schemes
+CryptoPP::RSAES_OAEP_SHA_Encryptor encryptor;
+CryptoPP::RSAES_OAEP_SHA_Decryptor decryptor;
+
+////////////////////////////////////////////////
+// Cipher text space
+char* cipherSpace;
+
+extern "C" uint8_t ByteEncrypt (uint8_t pixel_val, int index) {
+	static const int SECRET_SIZE = 1;
+	CryptoPP::SecByteBlock plaintext( SECRET_SIZE );
+	memset( plaintext, pixel_val, SECRET_SIZE );	
+
+	// Now that there is a concrete object, we can validate
+	assert( 0 != encryptor.FixedMaxPlaintextLength() );
+	assert( plaintext.size() <= encryptor.FixedMaxPlaintextLength() );
+
+	// Create cipher text space
+	size_t ecl = encryptor.CiphertextLength( plaintext.size() );
+	assert( 0 != ecl );
+	CryptoPP::SecByteBlock ciphertext( ecl );
+
+	encryptor.Encrypt( rng, plaintext, plaintext.size(), ciphertext );
+
+	memcpy(&cipherSpace[index * CIPHER_SIZE], ciphertext.data(), ciphertext.size());
+	uint8_t* res = reinterpret_cast<uint8_t*>(ciphertext.data());
+	return *res;
+}
+
+extern "C" uint8_t ByteDecrypt (uint8_t pixel_val, int index) {
+	CryptoPP::SecByteBlock ciphertext( CIPHER_SIZE );
+	memcpy( ciphertext, &cipherSpace[index * CIPHER_SIZE], CIPHER_SIZE );	
+
+	// Now that there is a concrete object, we can check sizes
+	assert( 0 != decryptor.FixedCiphertextLength() );
+	assert( ciphertext.size() <= decryptor.FixedCiphertextLength() );
+
+	// Create recovered text space
+	size_t dpl = decryptor.MaxPlaintextLength( ciphertext.size() );
+	assert( 0 != dpl );
+	CryptoPP::SecByteBlock recovered( dpl );
+
+	CryptoPP::DecodingResult result = decryptor.Decrypt( rng, ciphertext, ciphertext.size(), recovered );
+
+	// More sanity checks
+	assert( result.isValidCoding );        
+	assert( result.messageLength <= decryptor.MaxPlaintextLength( ciphertext.size() ) );
+
+	// At this point, we can set the size of the recovered
+	// data. Until decryption occurs (successfully), we
+	// only know its maximum size
+	recovered.resize( result.messageLength );
+
+	uint8_t* res = reinterpret_cast<uint8_t*>(recovered.data());
+	return *res;
+}
+
+
+HalideExtern_2 (uint8_t, ByteEncrypt, uint8_t, int);
+HalideExtern_2 (uint8_t, ByteDecrypt, uint8_t, int);
+
 int main(int argc, char **argv) {
+
+	std::cout << "Generating RSA public and private keys..." << std::endl;
 
 	////////////////////////////////////////////////
 	// Generate keys
-	CryptoPP::AutoSeededRandomPool rng;
-
 	CryptoPP::InvertibleRSAFunction params;
-	params.GenerateRandomWithKeySize(rng, 3072);
+
+	params.GenerateRandomWithKeySize(rng, 1536);
 
 	CryptoPP::RSA::PrivateKey privateKey(params);
 	CryptoPP::RSA::PublicKey publicKey(params);
 
+	std::cout << "Encryption..." << std::endl;
+	std::string encryption_schedule = "serial";
+	std::cout << "Enter the schedule for encryption:\n-row\n-vectorized_row\n-tile\n-vectorized_tile\n-vectorized\n-serial" << std::endl;
+	std::cin >> encryption_schedule;
+
+	////////////////////////////////////////////////
+	// Encryptor machine from the pubic key
+	encryptor = CryptoPP::RSAES_OAEP_SHA_Encryptor ( publicKey );
+	
 	////////////////////////////////////////////////
 	// Load input image
-	Halide::Buffer<unsigned char> input = Halide::Tools::load_image("images/rgb.png");
-	Halide::Buffer<unsigned char> output;
-	Halide::Var x, y, c, plain, cipher;
+	std::cout << "loading image..." << std::endl;
+	Halide::Buffer<uint8_t> input = Halide::Tools::load_image("images/rgb.png");
+
+	//cipher space allocation
+	cipherSpace = new char[input.height() * input.width() * input.channels() * CIPHER_SIZE];
+	int width = input.width();
+	int depth = input.channels();
+
+	Halide::Var x, y, c;
+	Halide::Var x_outer,x_inner,y_outer,y_inner,tile_index;
+	std::cout << "creating halide encryption pipeline..." << std::endl;
 	Halide::Func Image_Encryptor;
+	Image_Encryptor(x, y, c) = ByteEncrypt(input(x, y, c), (y * width + x) * depth + c)  ;
+
+	std::cout << "encrypting image..." << std::endl;
 
 	////////////////////////////////////////////////
-	// Encryption
-	CryptoPP::RSAES_OAEP_SHA_Encryptor e(publicKey);
+	// Schedule
+	////////////////////////////////////////////////
+	// Choose the schedule here among
+	// * "row"
+	// * "vectorized row"
+	// * "tile"
+	// * "vectorized tile"
+	if(encryption_schedule=="tile")
+	{
+		Image_Encryptor.tile(x, y, x_outer, y_outer, x_inner, y_inner, 64, 64);
+	  	Image_Encryptor.fuse(x_outer, y_outer, tile_index);
+	  	Image_Encryptor.parallel(tile_index);
+	}
+	else if(encryption_schedule=="vectorized_tile")
+	{
+		Image_Encryptor.tile(x,y,x_outer,y_outer,x_inner,y_inner,64,64);
+		Image_Encryptor.fuse(x_outer, y_outer, tile_index);
+		Image_Encryptor.parallel(tile_index);
+		//Tile again and vectorize
+		Halide::Var x_inside_out,y_inside_out,x_vector,y_pairs;
+		Image_Encryptor.tile(x_inner, y_inner, x_inside_out, y_inside_out, x_vector, y_pairs, 4, 2);
+		Image_Encryptor.vectorize(x_vector);
+		Image_Encryptor.unroll(y_pairs);
+	}
+	else if(encryption_schedule=="row")
+	{
+		Image_Encryptor.parallel(y);
+	}
+	else if(encryption_schedule=="vectorized_row")
+	{
+		Image_Encryptor.parallel(y);
+		Image_Encryptor.vectorize(x,4);
+	}
+	else if(encryption_schedule=="vectorized")
+	{
+		Image_Encryptor.vectorize(x, 8);
+	}
+	else
+	{
+	}
 
-	Image_Encryptor(plain, cipher, y) = CryptoPP::ss1(reinterpret_cast<unsigned char*>(plain(0, y, 0)), plain.witdh()*plain.channels(), 
-		true, new PK_EncryptorFilter(rng, e, new StringSink(reinterpret_cast<unsigned char*>(cipher(0, y, 0))))); 
+	////////////////////////////////////////////////
+	// Encrypt
+	double startTime = CycleTimer::currentSeconds();
+	Halide::Buffer<uint8_t> encrypted_image = Image_Encryptor.realize(input.width(), input.height(), input.channels());
+	double endTime = CycleTimer::currentSeconds();
 
-	Image_Encryptor.realize(input, output, input.height());
+	std::cout << "image encrypted ! check the output directory to see the cipher" << std::endl;
+	std::cout << "[serial encryption]:\t\t[" << (endTime - startTime) << "] s\n" << std::endl;
 
-	Halide::Tools::save_image(output, "out/encrypt.png");
+	Halide::Tools::save_image(encrypted_image, "out/cipher.png");
 
-	// string plain="RSA Encryption", cipher, recovered;
+	std::cout << "Decryption..." << std::endl;
+	std::string decryption_schedule = "serial";
+	std::cout << "Enter the schedule for decryption:\n-row\n-vectorized_row\n-tile\n-vectorized_tile\n-vectorized\n-serial" << std::endl;
+	std::cin >> decryption_schedule;
 
-	// ////////////////////////////////////////////////
-	// // Encryption
-	// RSAES_OAEP_SHA_Encryptor e(publicKey);
+	////////////////////////////////////////////////
+	// Decryptor machine from the private key (trapdoor)
+	decryptor = CryptoPP::RSAES_OAEP_SHA_Decryptor ( privateKey );
 
-	// StringSource ss1(plain, true,
-	//     new PK_EncryptorFilter(rng, e,
-	//         new StringSink(cipher)
-	//    ) // PK_EncryptorFilter
-	// ); // StringSource
+	std::cout << "creating halide decryption pipeline..." << std::endl;
+	Halide::Func Image_Decryptor;
+	Image_Decryptor(x, y, c) = ByteDecrypt(encrypted_image(x, y, c),(y * width + x) * depth + c);
 
-	// ////////////////////////////////////////////////
-	// // Decryption
-	// RSAES_OAEP_SHA_Decryptor d(privateKey);
+	std::cout << "decrypting image..." << std::endl;
 
-	// StringSource ss2(cipher, true,
-	//     new PK_DecryptorFilter(rng, d,
-	//         new StringSink(recovered)
-	//    ) // PK_DecryptorFilter
-	// ); // StringSource
+	////////////////////////////////////////////////
+	// Schedule
+	////////////////////////////////////////////////
+	// Choose the schedule here among
+	// * "row"
+	// * "vectorized row"
+	// * "tile"
+	// * "vectorized tile"
+	if(decryption_schedule=="tile")
+	{
+		Image_Decryptor.tile(x, y, x_outer, y_outer, x_inner, y_inner, 64, 64);
+	  	Image_Decryptor.fuse(x_outer, y_outer, tile_index);
+	  	Image_Decryptor.parallel(tile_index);
+	}
+	else if(decryption_schedule=="vectorized_tile")
+	{
+		Image_Decryptor.tile(x,y,x_outer,y_outer,x_inner,y_inner,64,64);
+		Image_Decryptor.fuse(x_outer, y_outer, tile_index);
+		Image_Decryptor.parallel(tile_index);
+		//Tile again and vectorize
+		Halide::Var x_inside_out,y_inside_out,x_vector,y_pairs;
+		Image_Decryptor.tile(x_inner, y_inner, x_inside_out, y_inside_out, x_vector, y_pairs, 4, 2);
+		Image_Decryptor.vectorize(x_vector);
+		Image_Decryptor.unroll(y_pairs);
+	}
+	else if(decryption_schedule=="row")
+	{
+		Image_Decryptor.parallel(y);
+	}
+	else if(decryption_schedule=="vectorized_row")
+	{
+		Image_Decryptor.parallel(y);
+		Image_Decryptor.vectorize(x,4);
+	}
+	else if(decryption_schedule=="vectorized")
+	{
+		Image_Decryptor.vectorize(x, 8);
+	}
+	else
+	{
+	}
 
-	// cout << "Recovered plain text" << endl;
 
+	////////////////////////////////////////////////
+	// Decrypt
+	startTime = CycleTimer::currentSeconds();
+	Halide::Buffer<uint8_t> decrypted_image = Image_Decryptor.realize(encrypted_image.width(), encrypted_image.height(), encrypted_image.channels());
+	endTime = CycleTimer::currentSeconds();
 	
-	
+	std::cout << "image decrypted ! check the output directory to see the recovered plain text" << std::endl;
+	std::cout << "[serial decryption]:\t\t[" << (endTime - startTime) << "] s\n" << std::endl;
 
-	// Encrypt_Machine(x, y, c) = value; //defining
+	Halide::Tools::save_image(decrypted_image, "out/recovered.png");
 
-	// //debug:
-	// Encrypt_Machine.trace_stores();  //tell halide to print on each evaluation when running
-	// Encrypt_Machine.print_loop_nest(); //tell halide to print pseudo code of how the loops are arranged 
-	// //print, print_when
-
-	// //scheduling primitive:
-	// Encrypt_Machine.parallel(y);  //row are computed in parallel with task queue. 
-	// 							  //Can control the nb of threads using HL_NUM_THREADS
-	// Encrypt_Machine.reorder(y, x, c); //first argument = innermost loop 
-
-	// Halide::Buffer<uint8_t> output = Encrypt_Machine.realize(input.width(), input.height(), input.channels());
-
-	// Halide::Func gradient("gradient"); //defining a stage
-	// Halide::Var x("x"), y("y"); //defining variables
-	// gradient (x, y) = x + y; //creating the stage
-	// Halide::Buffer<int32_t> output = gradient.realize(8, 8); //realising
-	// gradient.compile_to_lowered_stmt("gradient.html", {}, Halide::HTML);
+	delete [] cipherSpace;
 	return 0;
 }

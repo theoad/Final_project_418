@@ -46,6 +46,8 @@ LDFLAGS = -L$(HOME)/halide/bin \
 # define any libraries to link into executable:
 LIBS = -lHalide -lpthread -ldl `libpng-config --cflags --ldflags` -ljpeg -lcryptopp
 
+LLVMFLAGS = -rdynamic
+
 # The relevant cpp files can be found using the "make dependancies" command
 # Add .cpp files appearing in the dependancies output here
 # Add .h files path as describe earlier
@@ -56,14 +58,13 @@ OBJS=$(OBJDIR)/*.o
 # Compile & link direcly in one command (faster compile for small projects).
 # Consider partitioning the compilation as the project grows larger
 $(EXEC):
-	$(CXX) $(CXXFLAGS) $(CCFILES) $(INCLUDES) $(LDFLAGS) $(LIBS) -o $@
+	$(CXX) $(CXXFLAGS) $(CCFILES) $(INCLUDES) $(LDFLAGS) $(LIBS) $(LLVMFLAGS) -o $@
 
 # To know what are the dependencies of the cpp files to compile run make dependancies in the command
 dependancies:
 	$(CXX) -MM $(CCFILES) $(INCLUDES) $(LDFLAGS) $(LIBS)
 
 install:
-	mkdir -p $(OBJDIR) $(OUTPUTDIR)
-
+	mkdir $(OUTPUTDIR)
 clean:
 	rm -rf $(OBJDIR) $(OUTPUTDIR) $(EXEC)
